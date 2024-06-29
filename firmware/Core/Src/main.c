@@ -25,6 +25,8 @@
 #include "module_address.h"
 #include "i2c_slave.h"
 #include "module_available.h"
+
+#include "mh_z19.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -47,10 +49,18 @@ ADC_HandleTypeDef hadc1;
 
 I2C_HandleTypeDef hi2c1;
 
+UART_HandleTypeDef huart1;
+
 /* USER CODE BEGIN PV */
 uint8_t  module_slave_address = MODULE_ADDRESS_NOT_CONFIGURED;
 uint32_t global_adc_readout = 0;
 uint64_t global_counter = 0;
+uint8_t gobal_sensor_status = 0;
+
+MH_Z19 mhz_19_data;
+
+uint8_t rx_buff[MH_Z19_COMMAND_SIZE];
+uint8_t rd_command[MH_Z19_COMMAND_SIZE] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -58,8 +68,10 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void flash_slave_address(uint8_t address);
+void flash_module_booting(uint32_t duration);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -98,11 +110,15 @@ int main(void)
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+
   HAL_Delay(1000);
+
   module_slave_address = get_device_address_stable(&hadc1);
   flash_slave_address(module_slave_address);
   module_slave_address <<= 1; // Allow space for read/write bit
+
   HAL_Delay(1000);
 
   MX_I2C1_Init();
@@ -115,17 +131,27 @@ int main(void)
   set_sensor_type(MODULE_TYPE_NOT_CONFIGURED);
   set_sensor_id(MODULE_ID_NOT_CONFIGURED);
 
+  flash_module_booting(10); // Wait for MH-Z19
+
+  MX_USART1_UART_Init();
+
+  HAL_UART_Receive_IT(&huart1, mhz_19_data.rx_buffer, MH_Z19_COMMAND_SIZE);
+
+  mhz_19_data.uart_handle = &huart1;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
     global_counter++;
-    set_sensor_value_1(global_counter);
-
+	set_sensor_value_1(global_counter);
 	HAL_Delay(1000);
+
+	HAL_StatusTypeDef wtf = HAL_UART_Transmit_IT(&huart1, rd_command, MH_Z19_COMMAND_SIZE);
+	(void) wtf;
+    /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -278,6 +304,58 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  // TODO this is dirty af
+  static int count = 0;
+  if (count != 0) {
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+  }
+  count++;
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -308,6 +386,55 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void flash_module_booting(uint32_t duration)
+{
+	uint32_t i = 0;
+	uint8_t odd = 0;
+	uint64_t real_duration = duration * 4;
+
+	HAL_GPIO_WritePin(LED_OK_GPIO_Port, LED_OK_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LED_FAULT_GPIO_Port, LED_FAULT_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
+	while (i < real_duration)
+	{
+		if((odd % 2) == 0)
+		{
+			HAL_GPIO_WritePin(LED_OK_GPIO_Port, LED_OK_Pin, GPIO_PIN_SET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+			HAL_GPIO_WritePin(LED_FAULT_GPIO_Port, LED_FAULT_Pin, GPIO_PIN_SET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+			HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_SET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+		} else
+		{
+			HAL_GPIO_WritePin(LED_OK_GPIO_Port, LED_OK_Pin, GPIO_PIN_RESET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+			HAL_GPIO_WritePin(LED_FAULT_GPIO_Port, LED_FAULT_Pin, GPIO_PIN_RESET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+			HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
+			HAL_Delay(250);
+			i++;
+			if (i >= real_duration) break;
+		}
+		odd++;
+	}
+
+	HAL_GPIO_WritePin(LED_OK_GPIO_Port, LED_OK_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LED_FAULT_GPIO_Port, LED_FAULT_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(LED_STATUS_GPIO_Port, LED_STATUS_Pin, GPIO_PIN_RESET);
+
+}
+
 void flash_slave_address(uint8_t address)
 {
 
@@ -323,6 +450,33 @@ void flash_slave_address(uint8_t address)
 	}
 
 	HAL_GPIO_WritePin(LED_OK_GPIO_Port, LED_OK_Pin, GPIO_PIN_RESET);
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+
+	if (mh_z19_check_crc(mhz_19_data.rx_buffer))
+	{
+		uint16_t result = 0;
+		result = mhz_19_data.rx_buffer[2];
+		result <<= 8;
+		result |= mhz_19_data.rx_buffer[3];
+		mhz_19_data.co2_ppm = result;
+	}
+
+	/*
+	mhz_19_data.rx_buffer[0] = 0;
+	mhz_19_data.rx_buffer[1] = 0;
+	mhz_19_data.rx_buffer[2] = 0;
+	mhz_19_data.rx_buffer[3] = 0;
+	mhz_19_data.rx_buffer[4] = 0;
+	mhz_19_data.rx_buffer[5] = 0;
+	mhz_19_data.rx_buffer[6] = 0;
+	mhz_19_data.rx_buffer[7] = 0;
+	mhz_19_data.rx_buffer[8] = 0;
+	*/
+
+	HAL_UART_Receive_IT(&huart1, mhz_19_data.rx_buffer, MH_Z19_COMMAND_SIZE);
 }
 /* USER CODE END 4 */
 
