@@ -4,6 +4,7 @@
 #include "module_address.h"
 #include "i2c_slave.h"
 #include "module_available.h"
+#include "module_status.h"
 #include "mh_z19.h"
 
 #define MODULE_UNIQUE_ID 1
@@ -47,6 +48,7 @@ int main(void)
 	set_sensor_config_sequentialRead(true);
 	set_sensor_type(MODULE_TYPE_MH_Z19);
 	set_sensor_id(MODULE_UNIQUE_ID);
+	set_sensor_error(MODULE_STATUS_BOOTING);
 
 	HAL_Delay(1000);
 
@@ -56,11 +58,13 @@ int main(void)
 
 	if (HAL_I2C_EnableListen_IT(&hi2c1) != HAL_OK) Error_Handler();
 
-	flash_module_booting(10); // Wait for MH-Z19
+	flash_module_booting(40); // Wait for MH-Z19
 
 	MX_USART1_UART_Init();
 
 	mh_z19_init(&mh_z19_data, &huart1);
+
+	set_sensor_error(MODULE_STATUS_OK);
 
 	while (1)
 	{
