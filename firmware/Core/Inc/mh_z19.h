@@ -23,12 +23,14 @@
 typedef struct {
 	UART_HandleTypeDef *uart_handle;
 	uint8_t rx_buffer[MH_Z19_COMMAND_SIZE];
-	bool received_data_newer;
-	bool received_data_valid;
+	bool rx_complete;
+	bool rx_requested;
+	bool continuous_mode;
 	uint16_t co2_ppm;
 } MH_Z19;
 
-uint8_t mh_z19_get_co2_value(MH_Z19 *mh_z19_handle);
-bool mh_z19_check_crc(uint8_t *data);
+uint8_t mh_z19_init(MH_Z19 *mh_z19_handle, UART_HandleTypeDef *uart_handle);
+uint8_t mh_z19_request_data(MH_Z19 *mh_z19_handle);
+uint8_t mh_z19_on_rx_cplt(MH_Z19 *mh_z19_handle);
 
 #endif /* INC_MH_Z19_H_ */
